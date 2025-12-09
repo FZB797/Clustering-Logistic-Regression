@@ -162,7 +162,7 @@ def modeling_page():
 # ==============================================
 # MAIN LAYOUT
 # ==============================================
-st.sidebar.title("📌 Navigasi Tahap")
+st.sidebar.title("📌 Bank Customer Churn Prediction")
 
 if st.session_state.df is None:
     st.session_state.df = load_data()
