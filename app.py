@@ -1,142 +1,158 @@
-# ================================================================
-#  BANK CUSTOMER CHURN — CLUSTERING + LOGISTIC REGRESSION PIPELINE
-#  Streamlit Version — CLEAN & WORKING
-# ================================================================
-
 import pandas as pd
 import numpy as np
+import streamlit as st
 
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+from sklearn.metrics import roc_auc_score, confusion_matrix
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 
-import streamlit as st
-import warnings
-warnings.filterwarnings("ignore")
+st.set_page_config(page_title="Bank Churn Modeling", layout="wide")
 
-# ----------------------------
-# CONFIG
-# ----------------------------
-DATASET_PATH = "Bank Customer Churn Prediction.csv"
-RANDOM_STATE = 42
+# State awal untuk navigasi
+if "step" not in st.session_state:
+    st.session_state.step = 1
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "df_clustered" not in st.session_state:
+    st.session_state.df_clustered = None
+if "preprocess_cols" not in st.session_state:
+    st.session_state.preprocess_cols = None
 
 
-# ----------------------------
-# LOAD & BASIC CLEANING
-# ----------------------------
+# ==============================================
+# LOAD DATA
+# ==============================================
+@st.cache_data
 def load_data():
-    df = pd.read_csv(DATASET_PATH)
-
-    # Drop identifier if exists
-    if "customer_id" in df.columns:
-        df = df.drop(columns=["customer_id"])
-
-    # Ensure binary columns
-    for col in ["churn", "credit_card", "active_member"]:
-        if col in df.columns:
-            df[col] = df[col].astype(int)
-
-    return df
+    return pd.read_csv("Bank Customer Churn Prediction.csv")
 
 
-# ----------------------------
-# PREPROCESSING FOR CLUSTERING
-# ----------------------------
-def clustering_features(df):
-    df["balance_log"] = np.log1p(df["balance"])
-    df["estimated_salary_log"] = np.log1p(df["estimated_salary"])
+# ==============================================
+# STEP 1 — PREPROCESSING
+# ==============================================
+def preprocessing_page():
+    st.header("🧹 Tahap 1 — Preprocessing")
 
-    cluster_cols = ["credit_score", "age", "tenure", "balance_log",
-                    "products_number", "estimated_salary_log"]
+    df = st.session_state.df
 
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(df[cluster_cols])
+    st.write("Pilih kolom numerik untuk preprocessing (minimal 2):")
+    num_cols = df.select_dtypes(include=["number"]).columns.tolist()
+    selected = st.multiselect("Kolom numerik:", num_cols, default=[])
 
-    return X_scaled, df
+    if st.button("Jalankan Preprocessing"):
+        if len(selected) < 2:
+            st.error("Pilih minimal 2 kolom!")
+            return
+
+        scaler = StandardScaler()
+        df[selected] = scaler.fit_transform(df[selected])
+
+        st.session_state.preprocess_cols = selected
+        st.success("Preprocessing selesai!")
+        st.session_state.step = 2
+
+    st.write("Dataset (preview):")
+    st.dataframe(df.head())
 
 
-# ----------------------------
-# RUN CLUSTERING
-# ----------------------------
-def run_clustering(df):
-    X_scaled, df = clustering_features(df)
+# ==============================================
+# STEP 2 — CLUSTERING
+# ==============================================
+def clustering_page():
+    st.header("🔮 Tahap 2 — Clustering")
 
-    kmeans = KMeans(n_clusters=4, random_state=RANDOM_STATE)
-    df["cluster_id"] = kmeans.fit_predict(X_scaled)
+    df = st.session_state.df
+    cols = st.session_state.preprocess_cols
 
-    return df
+    cluster_k = st.slider("Jumlah cluster", min_value=2, max_value=10, value=4)
+
+    if st.button("Jalankan Clustering"):
+        kmeans = KMeans(n_clusters=cluster_k, random_state=42)
+        df["cluster_id"] = kmeans.fit_predict(df[cols])
+        st.session_state.df_clustered = df
+        st.success("Clustering selesai!")
+        st.session_state.step = 3
+
+    st.write("Dataset (preview):")
+    st.dataframe(df.head())
 
 
-# ----------------------------
-# LOGISTIC REGRESSION
-# ----------------------------
-def run_logistic_regression(df):
-    y = df["churn"]
-    X = df.drop(columns=["churn"])
+# ==============================================
+# STEP 3 — MODELING
+# ==============================================
+def modeling_page():
+    st.header("📌 Tahap 3 — Modeling Logistic Regression")
 
-    cat_cols = X.select_dtypes(include=["object"]).columns.tolist()
-    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
+    df_no_cluster = st.session_state.df.drop(columns=["cluster_id"])
+    df_cluster = st.session_state.df_clustered
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", StandardScaler(), num_cols),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols),
-        ]
+    y = df_cluster["churn"]
+    X_no = df_no_cluster.drop(columns=["churn"])
+    X_cluster = df_cluster.drop(columns=["churn"])
+
+    cat_no = X_no.select_dtypes(include=["object"]).columns.tolist()
+    num_no = X_no.select_dtypes(include=["number"]).columns.tolist()
+
+    preprocess_no = ColumnTransformer(
+        [("num", StandardScaler(), num_no), ("cat", OneHotEncoder(handle_unknown="ignore"), cat_no)]
     )
 
     model = Pipeline(
-        steps=[
-            ("preprocess", preprocessor),
-            ("logreg", LogisticRegression(max_iter=500, class_weight="balanced")),
-        ]
+        [("preprocess", preprocess_no),
+         ("logreg", LogisticRegression(max_iter=500, class_weight="balanced"))]
     )
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=RANDOM_STATE, stratify=y
-    )
-
+    X_train, X_test, y_train, y_test = train_test_split(X_no, y, test_size=0.25, random_state=42, stratify=y)
     model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    y_prob = model.predict_proba(X_test)[:, 1]
+    auc_no = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
 
-    metrics = {
-        "AUC": roc_auc_score(y_test, y_prob),
-        "confusion_matrix": confusion_matrix(y_test, y_pred),
-        "classification_report": classification_report(y_test, y_pred),
-    }
+    # WITH CLUSTER
+    cat_cluster = X_cluster.select_dtypes(include=["object"]).columns.tolist()
+    num_cluster = X_cluster.select_dtypes(include=["number"]).columns.tolist()
 
-    return metrics
+    preprocess_cluster = ColumnTransformer(
+        [("num", StandardScaler(), num_cluster), ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cluster)]
+    )
+
+    model2 = Pipeline(
+        [("preprocess", preprocess_cluster),
+         ("logreg", LogisticRegression(max_iter=500, class_weight="balanced"))]
+    )
+
+    X_train, X_test, y_train, y_test = train_test_split(X_cluster, y, test_size=0.25, random_state=42, stratify=y)
+    model2.fit(X_train, y_train)
+    auc_cluster = roc_auc_score(y_test, model2.predict_proba(X_test)[:, 1])
+    cm_cluster = confusion_matrix(y_test, model2.predict(X_test))
+
+    st.success("Modeling selesai!")
+    st.write("### 🔥 Hasil")
+    st.write(f"- AUC tanpa clustering: **{auc_no:.4f}**")
+    st.write(f"- AUC dengan clustering: **{auc_cluster:.4f}**")
+    st.write("Confusion Matrix (dengan clustering):")
+    st.write(cm_cluster)
 
 
-# ================================================================
-#  STREAMLIT SECTION
-# ================================================================
-st.title("📌 Bank Customer Churn — Clustering + Logistic Regression")
+# ==============================================
+# MAIN LAYOUT
+# ==============================================
+st.sidebar.title("📌 Navigasi Tahap")
 
-st.write("🔄 **Loading dataset...**")
-df = load_data()
+if st.session_state.df is None:
+    st.session_state.df = load_data()
+    st.sidebar.success("Dataset dimuat")
 
-st.write("🔍 **Running clustering...**")
-df_clustered = run_clustering(df.copy())
+st.sidebar.write(f"Jumlah data: {len(st.session_state.df)} baris")
 
-# Logistic Regression WITHOUT clustering feature
-st.write("⚙ **Evaluating Logistic Regression (TANPA clustering)...**")
-metrics_no_cluster = run_logistic_regression(df.copy())
-
-# Logistic Regression WITH clustering feature
-st.write("⚙ **Evaluating Logistic Regression (DENGAN clustering)...**")
-metrics_with_cluster = run_logistic_regression(df_clustered.copy())
-
-# Results
-st.subheader("📊 Hasil Evaluasi Model")
-st.write("AUC Logistic Regression (tanpa clustering):", metrics_no_cluster["AUC"])
-st.write("AUC Logistic Regression (dengan clustering):", metrics_with_cluster["AUC"])
-
-st.write("Confusion Matrix (dengan clustering):")
-st.write(metrics_with_cluster["confusion_matrix"])
-
-st.success("Selesai ✔ Pipeline berhasil dijalankan!")
+if st.session_state.step == 1:
+    st.sidebar.info("Saat ini: PREPROCESSING")
+    preprocessing_page()
+elif st.session_state.step == 2:
+    st.sidebar.info("Saat ini: CLUSTERING")
+    clustering_page()
+elif st.session_state.step == 3:
+    st.sidebar.info("Saat ini: MODELING")
+    modeling_page()
