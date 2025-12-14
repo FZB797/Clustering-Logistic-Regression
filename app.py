@@ -83,14 +83,15 @@ def clustering_page():
         st.success("Clustering selesai!")
 
     # ===== OUTPUT VISUAL CLUSTERING =====
-    if "cluster_id" in df.columns:
+    if "cluster_id" in df.columns and len(cols) >= 2:
         st.subheader("📊 Visualisasi Clustering")
 
         fig, ax = plt.subplots()
         sns.scatterplot(
+            data=df,
             x=cols[0],
             y=cols[1],
-            hue=df["cluster_id"],
+            hue="cluster_id",
             palette="tab10",
             ax=ax
         )
@@ -108,6 +109,7 @@ def clustering_page():
 
     if st.button("⬅ Kembali ke Preprocessing"):
         st.session_state.step = 1
+
 
 
 # =====================================================
